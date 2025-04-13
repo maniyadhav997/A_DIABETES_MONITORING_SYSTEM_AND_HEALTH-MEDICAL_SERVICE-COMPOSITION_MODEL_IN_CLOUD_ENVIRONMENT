@@ -1,63 +1,72 @@
-from wsgiref import simple_server
-from flask import Flask, request, app, render_template
-from flask import Response
-from flask_cors import CORS
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 import pickle
 import bz2
 import numpy as np
-import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from pathlib import Path
+from fastapi.middleware.cors import CORSMiddleware
 
-app = Flask(__name__)
-CORS(app)
-app.config['DEBUG'] = True
+app = FastAPI()
 
-# Load Standard Scaler
-scalarobject = bz2.BZ2File("Model/standardScalar.pkl", "rb")
-scaler = pickle.load(scalarobject)
+# CORS middleware setup (if needed)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Load PCA Model
-pcaobject = bz2.BZ2File("Model/pcaModel.pkl", "rb")
-pca = pickle.load(pcaobject)
+# Setup for templates and static files
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-# Load ELM Model
-modelforpred = bz2.BZ2File("Model/modelForPrediction.pkl", "rb")
-model = pickle.load(modelforpred)
+# Load models
+scaler = pickle.load(bz2.BZ2File("Model/standardScalar.pkl", "rb"))
+pca = pickle.load(bz2.BZ2File("Model/pcaModel.pkl", "rb"))
+model = pickle.load(bz2.BZ2File("Model/modelForPrediction.pkl", "rb"))
 
-## Route for homepage
-@app.route('/')
-def index():
-    return render_template('index.html')
+# Home Page
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
-## Route for Single data point prediction
-@app.route('/predictdata', methods=['GET', 'POST'])
-def predict_datapoint():
-    result = ""
 
-    if request.method == 'POST':
-        Pregnancies = int(request.form.get("Pregnancies"))
-        Glucose = float(request.form.get('Glucose'))
-        BloodPressure = float(request.form.get('BloodPressure'))
-        SkinThickness = float(request.form.get('SkinThickness'))
-        Insulin = float(request.form.get('Insulin'))
-        BMI = float(request.form.get('BMI'))
-        DiabetesPedigreeFunction = float(request.form.get('DiabetesPedigreeFunction'))
-        Age = float(request.form.get('Age'))
+# Prediction Endpoint (Form Handling)
+@app.post("/predictdata", response_class=HTMLResponse)
+async def predict_data(
+    request: Request,
+    Pregnancies: float = Form(...),
+    Glucose: float = Form(...),
+    BloodPressure: float = Form(...),
+    SkinThickness: float = Form(...),
+    Insulin: float = Form(...),
+    BMI: float = Form(...),
+    DiabetesPedigreeFunction: float = Form(...),
+    Age: float = Form(...)
+):
+    try:
+        # Format input
+        input_data = np.array([[Pregnancies, Glucose, BloodPressure, SkinThickness,
+                                Insulin, BMI, DiabetesPedigreeFunction, Age]])
 
-        # Scaling and PCA Transformation
-        new_data_scaled = scaler.transform([[Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin, BMI, DiabetesPedigreeFunction, Age]])
-        new_data_pca = pca.transform(new_data_scaled)
-        predict = model.predict(new_data_pca)
+        # Preprocess input
+        scaled_data = scaler.transform(input_data)
+        transformed_data = pca.transform(scaled_data)
 
-        if predict[0] == 1:
-            result = 'Diabetic'
-        else:
-            result = 'Non-Diabetic'
+        # Make prediction
+        prediction = model.predict(transformed_data)
+        result = "Diabetic" if prediction[0] == 1 else "Non-Diabetic"
 
-        return render_template('single_prediction.html', result=result)
-    else:
-        return render_template('home.html')
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0")
+        return templates.TemplateResponse("single_prediction.html", {
+            "request": request,
+            "result": result
+        })
+    except Exception as e:
+        return templates.TemplateResponse("home.html", {
+            "request": request,
+            "result": f"Error: {str(e)}"
+        })
