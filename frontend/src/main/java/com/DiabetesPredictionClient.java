@@ -1,93 +1,92 @@
-import javax.swing.JOptionPane;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.IOException;
+import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 
-public class DiabetesPredictionClient {
+import java.io.*;
+import java.net.InetSocketAddress;
+import java.sql.*;
+import org.json.JSONObject;
 
-    private static double getValidatedInput(String fieldName) {
-        while (true) {
-            String input = JOptionPane.showInputDialog("Enter " + fieldName + ":");
-            if (input == null) {
-                int confirm = JOptionPane.showConfirmDialog(null,
-                        "No input entered for " + fieldName + ". Do you want to exit?", 
-                        "Confirm Exit", JOptionPane.YES_NO_OPTION);
-                if (confirm == JOptionPane.YES_OPTION) {
-                    System.exit(0);
-                } else {
-                    continue;
-                }
-            }
-            input = input.trim();
-            if (input.isEmpty()) {
-                JOptionPane.showMessageDialog(null, fieldName + " cannot be empty. Please enter a valid value.");
-                continue;
-            }
-            try {
-                return Double.parseDouble(input);
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(null, "Invalid input for " + fieldName + ". Please enter a valid number.");
-            }
-        }
+public class JavaBackendServer {
+
+    public static void main(String[] args) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        server.createContext("/savePrediction", new SavePredictionHandler());
+        server.setExecutor(null);
+        server.start();
+        System.out.println("Java backend server started on port 8080");
     }
 
-    public static void main(String[] args) {
-        try {
-            double pregnancies = getValidatedInput("number of Pregnancies");
-            double glucose = getValidatedInput("Glucose level");
-            double bloodPressure = getValidatedInput("Blood Pressure");
-            double skinThickness = getValidatedInput("Skin Thickness");
-            double insulin = getValidatedInput("Insulin level");
-            double bmi = getValidatedInput("BMI");
-            double diabetesPedigreeFunction = getValidatedInput("Diabetes Pedigree Function");
-            double age = getValidatedInput("Age");
-
-            String jsonInputString = String.format(
-                "{\"Pregnancies\": %s, \"Glucose\": %s, \"BloodPressure\": %s, \"SkinThickness\": %s, \"Insulin\": %s, \"BMI\": %s, \"DiabetesPedigreeFunction\": %s, \"Age\": %s}",
-                pregnancies, glucose, bloodPressure, skinThickness, insulin, bmi, diabetesPedigreeFunction, age
-            );
-
-            String serverUrl = "http://127.0.0.1:5000/predict";
-            URL url = new URL(serverUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json; utf-8");
-            conn.setRequestProperty("Accept", "application/json");
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(10000);
-
-            try (OutputStream os = conn.getOutputStream()) {
-                byte[] inputBytes = jsonInputString.getBytes("utf-8");
-                os.write(inputBytes, 0, inputBytes.length);
-                os.flush();
+    static class SavePredictionHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1); // Method Not Allowed
+                return;
             }
 
-            int responseCode = conn.getResponseCode();
-            StringBuilder response = new StringBuilder();
-            InputStream is = (responseCode >= 200 && responseCode < 300) ? conn.getInputStream() : conn.getErrorStream();
-            if (is != null) {
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(is, "utf-8"))) {
-                    String responseLine;
-                    while ((responseLine = br.readLine()) != null) {
-                        response.append(responseLine.trim());
-                    }
-                }
+            // Read request body
+            InputStream inputStream = exchange.getRequestBody();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+            StringBuilder jsonBody = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                jsonBody.append(line);
             }
 
-            if (responseCode >= 200 && responseCode < 300) {
-                JOptionPane.showMessageDialog(null, "Prediction Result: " + response.toString());
-            } else {
-                JOptionPane.showMessageDialog(null, "Error: Response Code " + responseCode + "\n" + response.toString());
+            try {
+                JSONObject json = new JSONObject(jsonBody.toString());
+
+                // Extract data from JSON
+                double age = json.getDouble("age");
+                double bmi = json.getDouble("bmi");
+                double glucose = json.getDouble("glucose");
+                double bloodPressure = json.getDouble("bloodPressure");
+                double insulin = json.getDouble("insulin");
+                double skinThickness = json.getDouble("skinThickness");
+                double pregnancies = json.getDouble("pregnancies");
+                String prediction = json.getString("prediction");
+
+                // Save to DB
+                saveToDatabase(age, bmi, glucose, bloodPressure, insulin, skinThickness, pregnancies, prediction);
+
+                String response = "Prediction data saved successfully!";
+                exchange.sendResponseHeaders(200, response.getBytes().length);
+                OutputStream os = exchange.getResponseBody();
+                os.write(response.getBytes());
+                os.close();
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                String response = "Error processing request.";
+                exchange.sendResponseHeaders(500, response.getBytes().length);
+                OutputStream os = exchange.getResponseBody();
+                os.write(response.getBytes());
+                os.close();
             }
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(null, "An unexpected error occurred: " + e.getMessage());
-            e.printStackTrace();
+        }
+
+        private void saveToDatabase(double age, double bmi, double glucose, double bloodPressure,
+                double insulin, double skinThickness, double pregnancies, String prediction) throws SQLException {
+            // Replace with your DB config
+            String url = "jdbc:mysql://localhost:3306/healthdata";
+            String username = "root";
+            String password = "your_password";
+
+            Connection conn = DriverManager.getConnection(url, username, password);
+            String query = "INSERT INTO predictions (age, bmi, glucose, blood_pressure, insulin, skin_thickness, pregnancies, prediction) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            PreparedStatement stmt = conn.prepareStatement(query);
+            stmt.setDouble(1, age);
+            stmt.setDouble(2, bmi);
+            stmt.setDouble(3, glucose);
+            stmt.setDouble(4, bloodPressure);
+            stmt.setDouble(5, insulin);
+            stmt.setDouble(6, skinThickness);
+            stmt.setDouble(7, pregnancies);
+            stmt.setString(8, prediction);
+            stmt.executeUpdate();
+            stmt.close();
+            conn.close();
         }
     }
 }
