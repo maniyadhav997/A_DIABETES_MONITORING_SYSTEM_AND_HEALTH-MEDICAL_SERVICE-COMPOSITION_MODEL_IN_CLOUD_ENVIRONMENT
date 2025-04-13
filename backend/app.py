@@ -23,6 +23,7 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 #app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # Load models
 scaler = pickle.load(bz2.BZ2File("Model/standardScalar.pkl", "rb"))
