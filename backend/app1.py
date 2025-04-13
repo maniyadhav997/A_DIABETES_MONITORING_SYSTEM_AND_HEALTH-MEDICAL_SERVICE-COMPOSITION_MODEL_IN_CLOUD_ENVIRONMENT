@@ -1,4 +1,5 @@
-import streamlit as st
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import pickle
 import bz2
 import numpy as np
@@ -7,67 +8,57 @@ from sklearn.preprocessing import StandardScaler
 
 # Load Standard Scaler
 scalar_object = bz2.BZ2File("Model/standardScalar.pkl", "rb")
-scaler = pickle.load(scalar_object)
+scaler: StandardScaler = pickle.load(scalar_object)
 
 # Load PCA Model
 pca_object = bz2.BZ2File("Model/pcaModel.pkl", "rb")
-pca = pickle.load(pca_object)
+pca: PCA = pickle.load(pca_object)
 
 # Load ELM Model
 model_for_pred = bz2.BZ2File("Model/modelForPrediction.pkl", "rb")
 model = pickle.load(model_for_pred)
 
-# Streamlit app
-def main():
-    st.title('Diabetes Prediction 🩺')
+# FastAPI app
+app = FastAPI(title="Diabetes Prediction API")
 
-    # Input form
-    col1, col2, col3 = st.columns(3)
+# Input Schema
+class PatientData(BaseModel):
+    pregnancies: float
+    glucose: float
+    blood_pressure: float
+    skin_thickness: float
+    insulin: float
+    bmi: float
+    diabetes_pedigree_function: float
+    age: float
 
-    with col1:
-        pregnancies = float(st.text_input('Pregnancies', value='0', help='Number of times pregnant'))
+@app.post("/predict")
+def predict(data: PatientData):
+    try:
+        # Convert input to numpy array
+        input_array = np.array([
+            data.pregnancies,
+            data.glucose,
+            data.blood_pressure,
+            data.skin_thickness,
+            data.insulin,
+            data.bmi,
+            data.diabetes_pedigree_function,
+            data.age
+        ]).reshape(1, -1)
 
-    with col2:
-        glucose = float(st.text_input('Glucose', value='0', help='Plasma glucose concentration'))
+        # Preprocess: Scale and apply PCA
+        scaled_data = scaler.transform(input_array)
+        transformed_data = pca.transform(scaled_data)
 
-    with col3:
-        blood_pressure = float(st.text_input('Blood Pressure', value='0', help='Diastolic blood pressure'))
+        # Make prediction
+        prediction = model.predict(transformed_data)
 
-    col4, col5, col6 = st.columns(3)
+        result = {
+            "prediction": "Diabetic" if prediction[0] == 1 else "Non-Diabetic",
+            "status_code": 200
+        }
 
-    with col4:
-        skin_thickness = float(st.text_input('Skin Thickness', value='0', help='Triceps skin fold thickness'))
-
-    with col5:
-        insulin = float(st.text_input('Insulin', value='0', help='Insulin levels'))
-
-    with col6:
-        bmi = float(st.text_input('BMI', value='0', help='Body Mass Index (BMI)'))
-
-    col7, col8 = st.columns(2)
-
-    with col7:
-        diabetes_pedigree_function = float(st.text_input('Diabetes Pedigree Function', value='0', help='Assign a value of 0 if it is not available.'))
-
-    with col8:
-        age = float(st.text_input('Age', value='0', help='Age of the patient'))
-
-    # Predict button
-    if st.button('Predict'):
-        # Scaling and PCA Transformation
-        new_data_scaled = scaler.transform([[pregnancies, glucose, blood_pressure, skin_thickness, insulin, bmi, diabetes_pedigree_function, age]])
-        new_data_pca = pca.transform(new_data_scaled)
-        prediction = model.predict(new_data_pca)
-
-        if prediction[0] == 1:
-            result = 'Diabetic'
-            result_color = 'red'
-        else:
-            result = 'Non-Diabetic'
-            result_color = 'green'
-
-        # Styling the output text with larger font size and color using HTML/CSS
-        st.markdown(f'<p style="color:{result_color}; font-size:50px;">The Person is {result}</p>', unsafe_allow_html=True)
-
-if __name__ == '__main__':
-    main()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
